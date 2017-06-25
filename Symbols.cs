@@ -7,7 +7,6 @@
 // ============================================================
 //   DISCLAIMER: I'm new to C#, don't laugh
 // ============================================================
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -23,7 +22,7 @@ namespace ASM68K
         {
             //TODO: Slow
             int sectionIdx = m_Filenames.FindIndex(element => element.filename.ToUpper() == filename.ToUpper());
-            if(sectionIdx >= 0)
+            if (sectionIdx >= 0)
             {
                 int addressIdx = m_Filenames[sectionIdx].addresses.FindIndex(element => (lineNumber >= element.lineFrom && lineNumber <= element.lineTo));
                 if (addressIdx >= 0)
@@ -31,7 +30,7 @@ namespace ASM68K
                     return m_Filenames[sectionIdx].addresses[addressIdx].address;
                 }
             }
-            
+
             return 0;
         }
 
@@ -77,7 +76,8 @@ namespace ASM68K
             Filename = 0x88,            // A filename with start address and line count
             Address = 0x80,             // An address of next line
             AddressWithCount = 0x82,    // An address with line count
-            SymbolTable = 0x8A          // The symbol table
+            EndOfSection = 0x8A,        // End of section
+            Symbol = 0x2                // Symbol table entry
         }
 
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -208,18 +208,32 @@ namespace ASM68K
                                     }
                                     else
                                     {
-                                        //This is the first address in a filename chunk
-                                        filenameSection = new FilenameSection();
-                                        filenameSection.addresses = new List<AddressEntry>();
-                                        filenameSection.filename = readString;
+                                        //If filename already exists, continue adding data to it
+                                        int sectionIdx = m_Filenames.FindIndex(element => element.filename == readString);
+                                        if (sectionIdx >= 0)
+                                        {
+                                            //Continue
+                                            filenameSection = m_Filenames[sectionIdx];
 
-                                        //Reset line counter
-                                        currentLine = filenameHeader.firstLine;
+                                            //Fetch line counter
+                                            currentLine = filenameSection.addresses[filenameSection.addresses.Count - 1].lineTo;
+                                        }
+                                        else
+                                        {
+                                            //This is the first address in a filename chunk
+                                            filenameSection = new FilenameSection();
+                                            filenameSection.addresses = new List<AddressEntry>();
+                                            filenameSection.filename = readString;
+
+                                            //Reset line counter
+                                            currentLine = 0;
+                                        }
 
                                         //Chunk payload contains address
                                         addressEntry.address = chunkHeader.payload;
-                                        addressEntry.lineFrom = 0;
-                                        addressEntry.lineTo = currentLine;
+                                        addressEntry.lineFrom = currentLine;
+                                        addressEntry.lineTo = filenameHeader.firstLine;
+                                        currentLine = filenameHeader.firstLine;
                                         filenameSection.addresses.Add(addressEntry);
 
                                         //Add to filename list
@@ -265,23 +279,26 @@ namespace ASM68K
                                     break;
                                 }
 
-                            case ChunkId.SymbolTable:
+                            case ChunkId.Symbol:
                                 {
-                                    //Welcome to the symbol table
-                                    while (bytesRead < data.Length)
-                                    {
-                                        //Read chunk header
-                                        bytesRead += Serialise(ref stream, out symbolChunk);
-                                        symbolEntry.address = symbolChunk.address;
+                                    //Read symbol string length
+                                    byte stringLength = 0;
+                                    bytesRead += Serialise(ref stream, out stringLength);
 
-                                        //Read string
-                                        bytesRead += Serialise(ref stream, symbolChunk.stringLen, out symbolEntry.name);
+                                    //Read string
+                                    bytesRead += Serialise(ref stream, stringLength, out symbolEntry.name);
 
-                                        m_Symbols.Add(symbolEntry);
-                                    }
+                                    //Payload contains address
+                                    symbolEntry.address = chunkHeader.payload;
+
+                                    m_Symbols.Add(symbolEntry);
 
                                     break;
                                 }
+
+                            case ChunkId.EndOfSection:
+                                //Nothing of interest
+                                break;
                         }
                     }
 
@@ -292,9 +309,9 @@ namespace ASM68K
 
                     foreach (FilenameSection section in m_Filenames)
                     {
-                        foreach(AddressEntry address in section.addresses)
+                        foreach (AddressEntry address in section.addresses)
                         {
-                            if(!m_Addr2FileLine.ContainsKey(address.address))
+                            if (!m_Addr2FileLine.ContainsKey(address.address))
                             {
                                 m_Addr2FileLine[address.address] = new Tuple<string, int>(section.filename, address.lineTo);
                             }
